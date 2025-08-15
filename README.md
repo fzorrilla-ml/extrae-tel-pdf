@@ -1,4 +1,4 @@
-# Extractor de teléfono para PDFs de República Dominicana
+# Extractor de teléfono para PDFs
 
 Este repositorio contiene un pequeño proyecto en Python que permite extraer un
 número de teléfono de República Dominicana a partir de la primera página de un
