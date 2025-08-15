@@ -1,0 +1,87 @@
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g., 1.0.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pdfminer.six pymupdf pytesseract pyinstaller Pillow
+
+      - name: Install Tesseract via Chocolatey
+        run: choco install tesseract -y
+
+      - name: Vendorize Tesseract binaries
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor\tesseract | Out-Null
+          Copy-Item "$Env:ProgramFiles\Tesseract-OCR\*" vendor\tesseract -Recurse
+
+      - name: Include tessdata (eng + spa) in bundle
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor\tesseract\tessdata | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata" -OutFile "vendor\tesseract\tessdata\eng.traineddata"
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata" -OutFile "vendor\tesseract\tessdata\spa.traineddata"
+
+      - name: Build exe
+        run: |
+          pyinstaller --onefile --name extrae_tel_pdf --add-data "vendor\\tesseract;tesseract" extrae_tel_pdf_ocr.py
+
+      - name: Rename artifact with version
+        shell: powershell
+        run: |
+          $ver = "${{ inputs.tag }}"
+          Rename-Item "dist\\extrae_tel_pdf.exe" "dist\\extrae_tel_pdf_v$ver.exe"
+
+      - name: SHA256
+        id: hash
+        shell: powershell
+        run: |
+          $f = Get-ChildItem dist\\extrae_tel_pdf_v*.exe | Select-Object -First 1
+          $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+          echo "hash=$h" >> $env:GITHUB_OUTPUT
+          echo "file=$($f.Name)" >> $env:GITHUB_OUTPUT
+          echo "path=$($f.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ inputs.tag }}
+          release_name: v${{ inputs.tag }}
+          draft: false
+          prerelease: false
+          body: |
+            Windows standalone build.
+            **SHA256**: ${{ steps.hash.outputs.hash }}
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ steps.hash.outputs.path }}
+          asset_name: ${{ steps.hash.outputs.file }}
+          asset_content_type: application/vnd.microsoft.portable-executable
