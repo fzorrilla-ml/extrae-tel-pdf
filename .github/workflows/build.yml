@@ -1,0 +1,58 @@
+name: build-windows-exe
+
+# Este workflow de GitHub Actions compila el script extrae_tel_pdf_ocr.py como un
+# ejecutable para Windows sin dependencias visibles. Utiliza un runner de
+# Windows, instala Python y las dependencias necesarias, instala Tesseract
+# mediante Chocolatey, descarga el archivo de datos de entrenamiento en
+# español y, finalmente, empaqueta el ejecutable con PyInstaller incluyendo
+# Tesseract y sus datos dentro del bundle. El artefacto generado se sube
+# como "extrae_tel_pdf_exe" para su descarga.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias de Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install pdfminer.six pymupdf pytesseract pyinstaller Pillow
+
+      - name: Instalar Tesseract OCR
+        run: |
+          choco install tesseract -y
+
+      - name: Descargar datos de entrenamiento en español
+        shell: powershell
+        run: |
+          $tessPath = "$Env:ProgramFiles\Tesseract-OCR"
+          $dest = Join-Path $tessPath 'tessdata\spa.traineddata'
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata" -OutFile $dest
+
+      - name: Preparar directorio vendor/tesseract
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor\tesseract | Out-Null
+          $src = "$Env:ProgramFiles\Tesseract-OCR"
+          Copy-Item $src\* -Destination vendor\tesseract -Recurse
+
+      - name: Compilar ejecutable
+        run: |
+          pyinstaller --onefile --name extrae_tel_pdf --add-data "vendor\tesseract;tesseract" extrae_tel_pdf_ocr.py
+
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: extrae_tel_pdf_exe
+          path: dist\extrae_tel_pdf.exe
