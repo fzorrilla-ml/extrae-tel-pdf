@@ -5,7 +5,7 @@
 import sys, os, re, unicodedata, io, shutil
 from typing import Optional, Tuple, List
 
-# ── Resolución de rutas (PyInstaller onefile o ejecución local)
+# —— Resolución de rutas (PyInstaller onefile o ejecución local)
 BUNDLE_BASE = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
 TESS_DIR     = os.path.join(BUNDLE_BASE, "tesseract")             # contiene tesseract.exe
 TESSDATA_DIR = os.path.join(TESS_DIR, "tessdata")                 # contiene *.traineddata
@@ -42,7 +42,8 @@ PHONE_RE = re.compile(r'(?<!\d)(?:\+?1[\s\-.]?)?\(?(?:809|829|849)\)?[\s\-.]?\d{
 def normalize(s: str) -> str:
     return ''.join(c for c in unicodedata.normalize('NFKD', s) if not unicodedata.combining(c)).lower()
 
-# ───────────────────────── texto nativo (pdfminer)
+# ———————————————————————————————
+# —————————— texto nativo (pdfminer)
 def try_pdf_text(pdf_path: str, width_frac=0.40, height_frac=0.25) -> Optional[str]:
     from pdfminer.high_level import extract_pages
     from pdfminer.layout import LTPage, LTTextContainer, LTTextLine
@@ -74,7 +75,8 @@ def try_pdf_text(pdf_path: str, width_frac=0.40, height_frac=0.25) -> Optional[s
             if m: return m.group(0).strip()
     return None
 
-# ───────────────────────── OCR esquina superior derecha
+# ———————————————————————————————
+# ——————— OCR esquina superior derecha
 def ocr_top_right(pdf_path: str, width_frac=0.40, height_frac=0.25) -> Optional[str]:
     import fitz
     from PIL import Image, ImageOps, ImageFilter
