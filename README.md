@@ -13,7 +13,7 @@ el texto **“Número asignado:”** y extrae el número de teléfono que aparec
 continuación. Soporta documentos con texto nativo (usa pdfminer) y
 documentos escaneados (usa PyMuPDF y Tesseract OCR). Una vez encontrado,
 crea una copia del PDF original en la misma carpeta, nombrada únicamente con
-los dígitos del teléfono y la extensión `.pdf` (p. ej. `8495072495.pdf`).
+los dígitos del teléfono y la extensión `.pdf` (p. ej. `DIGITOS.pdf`).
 
 ## Ejecución local
 
