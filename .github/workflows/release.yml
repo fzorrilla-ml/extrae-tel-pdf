@@ -1,0 +1,84 @@
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g., 1.0.2)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # (Opcional) Vendorizar Tesseract en ./tesseract
+      - name: (Optional) Install Tesseract via Chocolatey
+        run: |
+          choco install -y tesseract
+          $src = "C:\Program Files\Tesseract-OCR"
+          if (Test-Path $src) {
+            New-Item -ItemType Directory -Force -Path "tesseract" | Out-Null
+            Copy-Item -Recurse -Force "$src\*" "tesseract\"
+          }
+
+      - name: Build exe
+        run: |
+          pyinstaller --noconfirm --onefile --name extrae_tel_pdf extrae_tel_pdf_ocr.py
+
+      - name: Copy tessdata next to exe
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\tessdata | Out-Null
+          Copy-Item -Recurse -Force tessdata\* dist\tessdata\
+
+      - name: Rename artifact with version (fixed)
+        shell: pwsh
+        run: |
+          $ver = "${{ inputs.tag }}"
+          Rename-Item -Path "dist\extrae_tel_pdf.exe" -NewName "extrae_tel_pdf_v$ver.exe"
+
+      - name: Zip exe + tessdata (+ tesseract si existe)
+        shell: pwsh
+        run: |
+          $ver = "${{ inputs.tag }}"
+          $zip = "dist\extrae_tel_pdf_v$ver.zip"
+          $paths = @("dist\extrae_tel_pdf_v$ver.exe", "dist\tessdata")
+          if (Test-Path "dist\tesseract") { $paths += "dist\tesseract" }
+          if (Test-Path $zip) { Remove-Item -Force $zip }
+          Compress-Archive -Force -Path $paths -DestinationPath $zip
+
+      - name: SHA256 of ZIP
+        shell: pwsh
+        run: |
+          $ver = "${{ inputs.tag }}"
+          $zip = "dist\extrae_tel_pdf_v$ver.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash
+          "$hash  $(Split-Path -Leaf $zip)" | Out-File -Encoding ASCII "dist\extrae_tel_pdf_v$ver.zip.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: Release ${{ inputs.tag }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/extrae_tel_pdf_v${{ inputs.tag }}.zip
+            dist/extrae_tel_pdf_v${{ inputs.tag }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
