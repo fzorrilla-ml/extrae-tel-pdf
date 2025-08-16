@@ -1,166 +1,164 @@
 #!/usr/bin/env python3
-# extrae_tel_pdf_ocr.py — Extrae teléfono RD y crea copia del PDF (sobrescribe)
-# Uso (genérico):  extrae_tel_pdf <archivo.pdf>
-# Dep.: pdfminer.six, PyMuPDF (fitz), pytesseract, Tesseract OCR (binario)
-import sys, os, re, unicodedata, io, shutil
-from typing import Optional, Tuple, List
+# Extrae el teléfono RD desde la esquina superior derecha (tras "Número asignado:")
+# e imprime el número (solo dígitos). Además crea/actualiza una copia del PDF
+# en el mismo directorio, con nombre = <solo_digitos>.pdf (sobrescribe si existe).
 
-# —— Resolución de rutas (PyInstaller onefile o ejecución local)
-BUNDLE_BASE = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
-TESS_DIR     = os.path.join(BUNDLE_BASE, "tesseract")             # contiene tesseract.exe
-TESSDATA_DIR = os.path.join(TESS_DIR, "tessdata")                 # contiene *.traineddata
-TESS_EXE     = os.path.join(TESS_DIR, "tesseract.exe")
+import sys, os, re, io, shutil, unicodedata
+from pathlib import Path
+from typing import Optional, Tuple
+import fitz  # PyMuPDF
+from PIL import Image
+import pytesseract
 
-def _resolve_tessdata_dir() -> Optional[str]:
-    """Elige el mejor tessdata disponible."""
-    # 1) Si viene empacado con el exe
-    if os.path.isdir(TESSDATA_DIR) and any(f.endswith(".traineddata") for f in os.listdir(TESSDATA_DIR)):
-        return TESSDATA_DIR
-    # 2) Si el usuario definió TESSDATA_PREFIX fuera
+# -------------------- utilidades de rutas (ejecución normal o PyInstaller onefile)
+def _base_dir() -> Path:
+    if getattr(sys, "frozen", False):  # ejecutable (PyInstaller)
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+def resolve_tessdata_dir() -> Path:
+    """
+    Busca 'tessdata' en:
+      1) TESSDATA_PREFIX (si existe y contiene modelos)
+      2) ./tessdata junto al .exe/.py
+      3) sys._MEIPASS/tessdata (si algún día se usa --add-data)
+    """
+    cands = []
     env = os.environ.get("TESSDATA_PREFIX")
-    if env and os.path.isdir(env):
-        return env
-    # 3) Si hay tessdata junto al ejecutable/script (ejecución local de prueba)
-    local_tess = os.path.join(os.path.abspath(os.path.dirname(__file__)), "tessdata")
-    if os.path.isdir(local_tess) and any(f.endswith(".traineddata") for f in os.listdir(local_tess)):
-        return local_tess
-    return None
+    if env:
+        cands.append(Path(env))
+    cands.append(_base_dir() / "tessdata")
+    if hasattr(sys, "_MEIPASS"):
+        cands.append(Path(sys._MEIPASS) / "tessdata")
 
-# Configurar pytesseract / Tesseract
-try:
-    import pytesseract
-    if os.path.exists(TESS_EXE):
-        pytesseract.pytesseract.tesseract_cmd = TESS_EXE
-    _td = _resolve_tessdata_dir()
-    if _td:
-        os.environ["TESSDATA_PREFIX"] = _td
-except Exception:
-    pass
+    for p in cands:
+        if (p / "eng.traineddata").exists() and (p / "spa.traineddata").exists():
+            return p
+    # último recurso: retorna ./tessdata (servirá para que el error sea claro si faltan modelos)
+    return _base_dir() / "tessdata"
 
-PHONE_RE = re.compile(r'(?<!\d)(?:\+?1[\s\-.]?)?\(?(?:809|829|849)\)?[\s\-.]?\d{3}[\s\-.]?\d{4}(?!\d)')
+def resolve_tesseract_cmd() -> str:
+    """
+    Si incluimos binarios en ./tesseract (tesseract.exe + DLLs), úsalos.
+    De lo contrario, usa 'tesseract' del PATH del sistema.
+    """
+    cand = _base_dir() / "tesseract" / "tesseract.exe"
+    if cand.exists():
+        return str(cand)
+    return "tesseract"
 
-def normalize(s: str) -> str:
-    return ''.join(c for c in unicodedata.normalize('NFKD', s) if not unicodedata.combining(c)).lower()
+# -------------------- normalización y regex
+def _strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
-# ———————————————————————————————
-# —————————— texto nativo (pdfminer)
-def try_pdf_text(pdf_path: str, width_frac=0.40, height_frac=0.25) -> Optional[str]:
-    from pdfminer.high_level import extract_pages
-    from pdfminer.layout import LTPage, LTTextContainer, LTTextLine
-    pages = extract_pages(pdf_path, maxpages=1)
-    page_layout = next((p for p in pages if isinstance(p, LTPage)), None)
-    if not page_layout: return None
-    W, H = page_layout.width, page_layout.height
-    x_min, y_min = W*(1-width_frac), H*(1-height_frac)
-    lines: List[Tuple[float,float,str]] = []
-    def visit(c):
-        if isinstance(c, LTTextContainer):
-            for line in c:
-                if isinstance(line, LTTextLine):
-                    x0,y0,x1,y1 = line.bbox
-                    if x1>=x_min and y1>=y_min:
-                        t = line.get_text().strip()
-                        if t: lines.append((y1,x0,t))
-        if hasattr(c, "__iter__"):
-            for ch in c: visit(ch)
-    visit(page_layout)
-    lines.sort(key=lambda t:(-t[0], t[1]))
-    if not lines: return None
-    for i,(_,__,raw) in enumerate(lines):
-        n = normalize(raw)
-        if "numero" in n and "asignado" in n:
-            tail = raw.split(":",1)[1] if ":" in raw else ""
-            candidate = (tail+" "+(lines[i+1][2] if i+1<len(lines) else "")).strip()
-            m = PHONE_RE.search(candidate) or PHONE_RE.search(" ".join(l[2] for l in lines[i:]))
-            if m: return m.group(0).strip()
-    return None
-
-# ———————————————————————————————
-# ——————— OCR esquina superior derecha
-def ocr_top_right(pdf_path: str, width_frac=0.40, height_frac=0.25) -> Optional[str]:
-    import fitz
-    from PIL import Image, ImageOps, ImageFilter
-    import pytesseract
-
-    td = _resolve_tessdata_dir()
-    cfg = '--psm 6 --oem 3' + (f' --tessdata-dir "{td}"' if td else '')
-
-    doc = fitz.open(pdf_path)
-    if len(doc)==0: return None
-    page = doc[0]
-    pm = page.get_pixmap(matrix=fitz.Matrix(2.0,2.0))
-    img = Image.open(io.BytesIO(pm.tobytes("png")))
-
-    W,H = img.size
-    x0,y0 = int(W*(1-width_frac)), 0
-    x1,y1 = W, int(H*height_frac)
-    crop = img.crop((x0,y0,x1,y1))
-    crop = crop.resize((int(crop.width*1.5), int(crop.height*1.5)), Image.LANCZOS)
-    gray = ImageOps.grayscale(crop).filter(ImageFilter.UnsharpMask(radius=1.2, percent=150, threshold=3))
-
-    data = pytesseract.image_to_data(gray, lang="spa+eng", config=cfg, output_type=pytesseract.Output.DICT)
-    n = len(data.get("text", [])); lines={}
-    for i in range(n):
-        try: conf = int(data["conf"][i])
-        except: conf = -1
-        if conf<0: continue
-        key = (data["page_num"][i], data["block_num"][i], data["par_num"][i], data["line_num"][i])
-        lines.setdefault(key, []).append((data.get("left",[0])[i], data["text"][i]))
-    for k in lines: lines[k].sort(key=lambda t:t[0])
-    keys = sorted(lines.keys())
-    for idx,k in enumerate(keys):
-        tokens = [t for _,t in lines[k] if t.strip()]
-        if not tokens: continue
-        raw_line = " ".join(tokens); nline = normalize(raw_line)
-        if "numero" in nline and "asignado" in nline:
-            tail = raw_line.split(":",1)[1] if ":" in raw_line else ""
-            nxt  = keys[idx+1] if idx+1<len(keys) else None
-            nxt_txt = " ".join([t for _,t in lines[nxt]]) if nxt else ""
-            cand = (tail+" "+nxt_txt).strip()
-            m = PHONE_RE.search(cand)
-            if m: return m.group(0).strip()
-    txt = pytesseract.image_to_string(gray, lang="spa+eng", config=cfg)
-    pos = normalize(txt).find("numero asignado")
-    if pos>=0:
-        m = PHONE_RE.search(txt[pos:pos+500])
-        if m: return m.group(0).strip()
-    return None
+RD_REGEX = re.compile(
+    r"""
+    (?:\+?\s*1[\s\-\.]*)?           # opcional +1
+    (?:\(?\s*8(?:09|29|49)\s*\)?    # 809/829/849 con o sin paréntesis
+     [\s\-\.]*)                     # separadores
+    \d{3}[\s\-\.]*\d{4}             # 7 dígitos restantes con separadores opcionales
+    """,
+    re.VERBOSE,
+)
 
 def digits_only(s: str) -> str:
-    return re.sub(r'\D','',s)
+    return re.sub(r"\D", "", s)
 
-def copy_pdf_with_digits_name(src_pdf: str, phone: str) -> str:
-    out_dir = os.path.dirname(os.path.abspath(src_pdf))
-    digits  = digits_only(phone)
-    if not digits: raise ValueError("El teléfono extraído no contiene dígitos.")
-    dst = os.path.join(out_dir, f"{digits}.pdf")
-    shutil.copyfile(src_pdf, dst)  # sobrescribe
-    return dst
+# -------------------- OCR en esquina superior derecha
+def ocr_top_right_phone(pdf_path: Path) -> Optional[str]:
+    doc = fitz.open(str(pdf_path))
+    if doc.page_count == 0:
+        return None
+    page = doc.load_page(0)
+    rect = page.rect
 
-def main():
-    if len(sys.argv)!=2:
-        print("Uso: extrae_tel_pdf <archivo.pdf>", file=sys.stderr); sys.exit(2)
-    pdf = sys.argv[1]
-    if not (os.path.isfile(pdf) and pdf.lower().endswith(".pdf")):
-        print("ERROR: Debe indicar un archivo .pdf existente.", file=sys.stderr); sys.exit(2)
+    # recorte: esquina superior derecha (ajustable)
+    # ancho ~45% derecha, alto ~35% superior
+    crop = fitz.Rect(rect.width * 0.55, rect.y0, rect.x1, rect.height * 0.35)
+
+    # renderizamos a imagen con buena resolución
+    zoom = 2.0  # ~144 dpi*2 -> ~288 dpi
+    mat = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat, clip=crop, alpha=False)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+    # configurar Tesseract
+    tessdir = resolve_tessdata_dir()
+    os.environ["TESSDATA_PREFIX"] = str(tessdir)
+    pytesseract.pytesseract.tesseract_cmd = resolve_tesseract_cmd()
+
+    # OCR (español + inglés; psm 6 = bloque de texto uniforme)
+    text = pytesseract.image_to_string(img, lang="spa+eng", config="--psm 6").strip()
+
+    # buscamos la frase y luego el teléfono
+    norm = _strip_accents(text).lower()
+    clave = _strip_accents("Número asignado:").lower()
+    telefono = None
+
+    if clave in norm:
+        after = text[norm.index(clave) + len(clave):]
+        # tomar hasta fin de línea/primer salto
+        first_line = after.splitlines()[0] if after else ""
+        m = RD_REGEX.search(first_line)
+        if not m:
+            # fallback: buscar en el resto del bloque
+            m = RD_REGEX.search(after)
+        if m:
+            telefono = m.group(0)
+    else:
+        # fallback: buscar en todo el bloque por si el OCR omitió la frase
+        m = RD_REGEX.search(text)
+        if m:
+            telefono = m.group(0)
+
+    if not telefono:
+        return None
+
+    # normalizamos a 10 dígitos para RD (quitando +1 si vino)
+    d = digits_only(telefono)
+    if len(d) >= 10:
+        d = d[-10:]
+    return d
+
+# -------------------- copia del PDF con nombre = <solo_digitos>.pdf (sobrescribe)
+def copy_pdf_with_digits_name(src: Path, digits: str) -> Path:
+    dest = src.parent / f"{digits}.pdf"
+    # shutil.copyfile sobrescribe si existe
+    shutil.copyfile(src, dest)
+    return dest
+
+# -------------------- CLI
+def main(argv: list) -> int:
+    if len(argv) < 2:
+        print("Uso: extrae_tel_pdf <archivo.pdf>", file=sys.stderr)
+        return 1
+
+    pdf_path = Path(argv[1])
+    if not pdf_path.exists():
+        print(f"Error: no existe {pdf_path}", file=sys.stderr)
+        return 1
+
     try:
-        phone = try_pdf_text(pdf)
-    except Exception:
-        phone = None
-    if not phone:
-        try:
-            phone = ocr_top_right(pdf)
-        except Exception as e:
-            print(f"ERROR OCR: {e}", file=sys.stderr); sys.exit(1)
-    if not phone:
-        print("ERROR: No se encontró 'Número asignado:' con teléfono en la esquina superior derecha.", file=sys.stderr)
-        sys.exit(3)
-    try:
-        _ = copy_pdf_with_digits_name(pdf, phone)
+        phone = ocr_top_right_phone(pdf_path)
     except Exception as e:
-        print(f"ERROR al crear/reescribir la copia del PDF: {e}", file=sys.stderr)
-        print(phone); sys.exit(4)
-    print(phone); sys.exit(0)
+        print(f"ERROR OCR: {e}", file=sys.stderr)
+        return 1
+
+    if not phone:
+        print("ERROR: No se pudo extraer el teléfono.", file=sys.stderr)
+        return 2
+
+    # imprime solo dígitos
+    print(phone)
+
+    # crea/sobrescribe copia con nombre = <solo_digitos>.pdf
+    try:
+        copy_pdf_with_digits_name(pdf_path, phone)
+    except Exception as e:
+        print(f"ERROR al copiar el PDF: {e}", file=sys.stderr)
+        return 3
+
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main(sys.argv))
