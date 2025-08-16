@@ -7,8 +7,6 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v3
 
@@ -20,31 +18,30 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install pdfminer.six pymupdf pytesseract pyinstaller Pillow
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-      - name: Install Tesseract via Chocolatey
-        run: choco install tesseract -y
-
-      - name: Vendorize Tesseract binaries
-        shell: powershell
+      # (Opcional) Vendorizar Tesseract en ./tesseract para que no dependa del sistema
+      - name: (Optional) Install Tesseract via Chocolatey
         run: |
-          New-Item -ItemType Directory -Force -Path vendor\tesseract | Out-Null
-          Copy-Item "$Env:ProgramFiles\Tesseract-OCR\*" vendor\tesseract -Recurse
-
-      - name: Include tessdata (eng + spa) in bundle
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path vendor\tesseract\tessdata | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata" -OutFile "vendor\tesseract\tessdata\eng.traineddata"
-          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata" -OutFile "vendor\tesseract\tessdata\spa.traineddata"
-          Write-Host "Bundled tessdata:"; Get-ChildItem vendor\tesseract\tessdata | Select-Object Name,Length
+          choco install -y tesseract
+          $src = "C:\Program Files\Tesseract-OCR"
+          if (Test-Path $src) {
+            New-Item -ItemType Directory -Force -Path "tesseract" | Out-Null
+            Copy-Item -Recurse -Force "$src\*" "tesseract\"
+          }
 
       - name: Build exe
         run: |
-          pyinstaller --onefile --name extrae_tel_pdf --add-data "vendor\\tesseract;tesseract" extrae_tel_pdf_ocr.py
+          pyinstaller --noconfirm --onefile --name extrae_tel_pdf extrae_tel_pdf_ocr.py
 
-      - name: Upload artifact
+      - name: Copy tessdata next to exe
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\tessdata | Out-Null
+          Copy-Item -Recurse -Force tessdata\* dist\tessdata\
+
+      - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: extrae_tel_pdf_exe
-          path: dist\extrae_tel_pdf.exe
+          name: windows-dist
+          path: dist/**
