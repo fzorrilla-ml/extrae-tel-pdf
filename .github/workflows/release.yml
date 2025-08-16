@@ -27,40 +27,37 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # (Opcional) Vendorizar Tesseract en ./tesseract
-      - name: (Optional) Install Tesseract via Chocolatey
+      - name: Install Tesseract via Chocolatey
         run: |
           choco install -y tesseract
           $src = "C:\Program Files\Tesseract-OCR"
-          if (Test-Path $src) {
-            New-Item -ItemType Directory -Force -Path "tesseract" | Out-Null
-            Copy-Item -Recurse -Force "$src\*" "tesseract\"
-          }
+          if (!(Test-Path $src)) { throw "No se encontró Tesseract-OCR" }
+          New-Item -ItemType Directory -Force -Path "tesseract" | Out-Null
+          Copy-Item -Recurse -Force "$src\*" "tesseract\"
 
       - name: Build exe
         run: |
           pyinstaller --noconfirm --onefile --name extrae_tel_pdf extrae_tel_pdf_ocr.py
 
-      - name: Copy tessdata next to exe
+      - name: Copy tessdata & tesseract next to exe
         run: |
           New-Item -ItemType Directory -Force -Path dist\tessdata | Out-Null
           Copy-Item -Recurse -Force tessdata\* dist\tessdata\
+          Copy-Item -Recurse -Force .\tesseract dist\tesseract
 
-      - name: Rename artifact with version (fixed)
+      - name: Rename artifact with version
         shell: pwsh
         run: |
           $ver = "${{ inputs.tag }}"
           Rename-Item -Path "dist\extrae_tel_pdf.exe" -NewName "extrae_tel_pdf_v$ver.exe"
 
-      - name: Zip exe + tessdata (+ tesseract si existe)
+      - name: Zip exe + tessdata + tesseract
         shell: pwsh
         run: |
           $ver = "${{ inputs.tag }}"
           $zip = "dist\extrae_tel_pdf_v$ver.zip"
-          $paths = @("dist\extrae_tel_pdf_v$ver.exe", "dist\tessdata")
-          if (Test-Path "dist\tesseract") { $paths += "dist\tesseract" }
           if (Test-Path $zip) { Remove-Item -Force $zip }
-          Compress-Archive -Force -Path $paths -DestinationPath $zip
+          Compress-Archive -Force -Path "dist\extrae_tel_pdf_v$ver.exe","dist\tessdata","dist\tesseract" -DestinationPath $zip
 
       - name: SHA256 of ZIP
         shell: pwsh
