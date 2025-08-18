@@ -111,9 +111,9 @@ def ocr_top_right_phone(pdf_path: Path) -> Optional[str]:
         d = d[-10:]  # conserva 10 dígitos finales (RD)
     return d
 
-# -------------------- Copia PDF con nombre = <digitos>.pdf (sobrescribe)
+# -------------------- Copia PDF con nombre = T<digitos>.pdf (sobrescribe)
 def copy_pdf_with_digits_name(src: Path, digits: str) -> Path:
-    dest = src.parent / f"{digits}.pdf"
+    dest = src.parent / f"T{digits}.pdf"
     shutil.copyfile(src, dest)  # sobrescribe si existe
     return dest
 
