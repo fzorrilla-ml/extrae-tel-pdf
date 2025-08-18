@@ -5,7 +5,7 @@ Herramienta de consola para Windows que:
 1. Lee el PDF indicado.
 2. Extrae el teléfono de **República Dominicana** ubicado en la **esquina superior derecha**, justo después del texto **“Número asignado:”**.
 3. Imprime el teléfono en **stdout** como **solo dígitos** (sin espacios, paréntesis, guiones ni “+”).
-4. Crea una copia del PDF con nombre **`<solo_digitos>.pdf`** en el mismo directorio (sobrescribe si existe).
+4. Crea una copia del PDF con nombre **`T<solo_digitos>.pdf`** en el mismo directorio (sobrescribe si existe).
 
 > Soporta prefijo +1 opcional y los códigos de área RD **809 / 829 / 849**.
 
